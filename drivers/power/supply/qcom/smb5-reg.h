@@ -23,6 +23,7 @@
 #define PERPH_SUBTYPE_OFFSET	0x05
 #define SUBTYPE_MASK		GENMASK(7, 0)
 #define INT_RT_STS_OFFSET	0x10
+#define SDAM_TYPE		0x2E
 
 /********************************
  *  CHGR Peripheral Registers  *
@@ -338,6 +339,7 @@ enum {
 #define SNK_RP_STD_DAM_BIT			BIT(6)
 #define SNK_RP_1P5_DAM_BIT			BIT(5)
 #define SNK_RP_3P0_DAM_BIT			BIT(4)
+#define SNK_DAM_MASK				GENMASK(6, 4)
 #define SNK_DAM_500MA_BIT			BIT(6)
 #define SNK_DAM_1500MA_BIT			BIT(5)
 #define SNK_DAM_3000MA_BIT			BIT(4)
@@ -558,4 +560,8 @@ enum {
 /* SDAM regs */
 #define MISC_PBS_RT_STS_REG			(MISC_PBS_BASE + 0x10)
 #define PULSE_SKIP_IRQ_BIT			BIT(4)
+
+#define SDAM_QC_DET_STATUS_REG			0x58
+#define SDAM_QC_ADC_LSB_REG			0x54
+
 #endif /* __SMB5_CHARGER_REG_H */

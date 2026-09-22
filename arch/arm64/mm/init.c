@@ -56,6 +56,8 @@
 #include <asm/tlb.h>
 #include <asm/alternative.h>
 
+EXPORT_SYMBOL_GPL(kimage_vaddr);
+
 /*
  * We need to be able to catch inadvertent references to memstart_addr
  * that occur (potentially in generic code) before arm64_memblock_init()
@@ -506,10 +508,9 @@ void __init arm64_memblock_init(void)
 	 * Save bootloader imposed memory limit before we overwirte
 	 * memblock.
 	 */
-	if (memory_limit == PHYS_ADDR_MAX)
+	bootloader_memory_limit = memblock_max_addr(memory_limit);
+	if (bootloader_memory_limit > memblock_end_of_DRAM())
 		bootloader_memory_limit = memblock_end_of_DRAM();
-	else
-		bootloader_memory_limit = memblock_max_addr(memory_limit);
 
 	update_memory_limit();
 
@@ -896,21 +897,15 @@ static void kernel_physical_mapping_remove(unsigned long start,
 
 }
 
-int arch_remove_memory(u64 start, u64 size, struct vmem_altmap *altmap)
+void arch_remove_memory(int nid, u64 start, u64 size,
+			struct vmem_altmap *altmap)
 {
 	unsigned long start_pfn = start >> PAGE_SHIFT;
 	unsigned long nr_pages = size >> PAGE_SHIFT;
-	struct page *page = pfn_to_page(start_pfn);
-	struct zone *zone;
-	int ret = 0;
 
-	zone = page_zone(page);
-	ret = __remove_pages(zone, start_pfn, nr_pages, altmap);
-	WARN_ON_ONCE(ret);
+	__remove_pages(start_pfn, nr_pages, altmap);
 
 	kernel_physical_mapping_remove(start, start + size);
-
-	return ret;
 }
 
 #endif /* CONFIG_MEMORY_HOTREMOVE */

@@ -254,7 +254,7 @@ int fsa4480_unreg_notifier(struct notifier_block *nb,
 		goto done;
 	}
 	/* Do not reset switch settings for usb digital hs */
-	if (mode.intval != POWER_SUPPLY_TYPEC_SINK)
+	if (mode.intval == POWER_SUPPLY_TYPEC_SINK_AUDIO_ADAPTER)
 		fsa4480_usbc_update_settings(fsa_priv, 0x18, 0x98);
 	rc = blocking_notifier_chain_unregister
 					(&fsa_priv->fsa4480_notifier, nb);
@@ -402,10 +402,7 @@ static int fsa4480_probe(struct i2c_client *i2c,
 	INIT_WORK(&fsa_priv->usbc_analog_work,
 		  fsa4480_usbc_analog_work_fn);
 
-	fsa_priv->fsa4480_notifier.rwsem =
-		(struct rw_semaphore)__RWSEM_INITIALIZER
-		((fsa_priv->fsa4480_notifier).rwsem);
-	fsa_priv->fsa4480_notifier.head = NULL;
+	BLOCKING_INIT_NOTIFIER_HEAD(&fsa_priv->fsa4480_notifier);
 
 	return 0;
 

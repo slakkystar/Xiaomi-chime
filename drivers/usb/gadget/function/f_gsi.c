@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2015-2020, The Linux Foundation. All rights reserved.
  */
 
 #include <linux/module.h>
@@ -785,6 +785,13 @@ static int ipa_suspend_work_handler(struct gsi_data_port *d_port)
 		goto done;
 	}
 
+	/*
+	 * Ensure that the DBL is blocked before suspend.
+	 */
+	block_db = true;
+	usb_gsi_ep_op(gsi->d_port.in_ep, (void *)&block_db,
+					GSI_EP_OP_SET_CLR_BLOCK_DBL);
+
 	log_event_dbg("%s: Calling xdci_suspend", __func__);
 	ret = ipa_usb_xdci_suspend(gsi->d_port.out_channel_handle,
 				gsi->d_port.in_channel_handle, gsi->prot_id,
@@ -859,8 +866,10 @@ static int gsi_ep_enable(struct f_gsi *gsi)
 		ret = usb_gsi_ep_op(gsi->d_port.out_ep,
 				&gsi->d_port.out_request, GSI_EP_OP_CONFIG);
 		if (ret) {
-			usb_gsi_ep_op(gsi->d_port.in_ep,
-				&gsi->d_port.in_request, GSI_EP_OP_DISABLE);
+			if (gsi->d_port.in_ep)
+				usb_gsi_ep_op(gsi->d_port.in_ep,
+					&gsi->d_port.in_request,
+					GSI_EP_OP_DISABLE);
 			return ret;
 		}
 	}

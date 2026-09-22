@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
  * Copyright (C) 2020 XiaoMi, Inc.
  */
 
@@ -89,10 +89,33 @@ static u32 a6xx_ifpc_pwrup_reglist[] = {
 	A6XX_CP_AHB_CNTL,
 };
 
-/* a620 and a650 need to program A6XX_CP_PROTECT_REG_47 for the infinite span */
+/* Applicable to a620 and a650 */
+static u32 a650_ifpc_pwrup_reglist[] = {
+	A6XX_CP_PROTECT_REG+32,
+	A6XX_CP_PROTECT_REG+33,
+	A6XX_CP_PROTECT_REG+34,
+	A6XX_CP_PROTECT_REG+35,
+	A6XX_CP_PROTECT_REG+36,
+	A6XX_CP_PROTECT_REG+37,
+	A6XX_CP_PROTECT_REG+38,
+	A6XX_CP_PROTECT_REG+39,
+	A6XX_CP_PROTECT_REG+40,
+	A6XX_CP_PROTECT_REG+41,
+	A6XX_CP_PROTECT_REG+42,
+	A6XX_CP_PROTECT_REG+43,
+	A6XX_CP_PROTECT_REG+44,
+	A6XX_CP_PROTECT_REG+45,
+	A6XX_CP_PROTECT_REG+46,
+	A6XX_CP_PROTECT_REG+47,
+};
+
 static u32 a650_pwrup_reglist[] = {
 	A6XX_RBBM_GBIF_CLIENT_QOS_CNTL,
-	A6XX_CP_PROTECT_REG + 47,
+	A6XX_TPL1_BICUBIC_WEIGHTS_TABLE_0,
+	A6XX_TPL1_BICUBIC_WEIGHTS_TABLE_1,
+	A6XX_TPL1_BICUBIC_WEIGHTS_TABLE_2,
+	A6XX_TPL1_BICUBIC_WEIGHTS_TABLE_3,
+	A6XX_TPL1_BICUBIC_WEIGHTS_TABLE_4,
 };
 
 /* Applicable to a640 and a680 */
@@ -347,14 +370,21 @@ struct a6xx_reglist_list {
 
 static void a6xx_patch_pwrup_reglist(struct adreno_device *adreno_dev)
 {
-	struct a6xx_reglist_list reglist[3];
+	struct a6xx_reglist_list reglist[4];
 	void *ptr = adreno_dev->pwrup_reglist.hostptr;
 	struct cpu_gpu_lock *lock = ptr;
 	int items = 0, i, j;
 	u32 *dest = ptr + sizeof(*lock);
+	u16 list_offset = 0;
 
 	/* Static IFPC-only registers */
-	reglist[items++] = REGLIST(a6xx_ifpc_pwrup_reglist);
+	reglist[items] = REGLIST(a6xx_ifpc_pwrup_reglist);
+	list_offset += reglist[items++].count * 2;
+
+	if (adreno_is_a650_family(adreno_dev)) {
+		reglist[items] = REGLIST(a650_ifpc_pwrup_reglist);
+		list_offset += reglist[items++].count * 2;
+	}
 
 	/* Static IFPC + preemption registers */
 	reglist[items++] = REGLIST(a6xx_pwrup_reglist);
@@ -397,7 +427,7 @@ static void a6xx_patch_pwrup_reglist(struct adreno_device *adreno_dev)
 	 * all the lists and list_offset should be specified as the size in
 	 * dwords of the first entry in the list.
 	 */
-	lock->list_offset = reglist[0].count * 2;
+	lock->list_offset = list_offset;
 }
 
 /*
@@ -462,9 +492,8 @@ static void a6xx_start(struct adreno_device *adreno_dev)
 	kgsl_regwrite(device, A6XX_UCHE_FILTER_CNTL, 0x804);
 	kgsl_regwrite(device, A6XX_UCHE_CACHE_WAYS, 0x4);
 
-	/* ROQ sizes are twice as big on a640/a680 than on a630 */
-	if (ADRENO_GPUREV(adreno_dev) >= ADRENO_REV_A640 &&
-		ADRENO_GPUREV(adreno_dev) <= ADRENO_REV_A680) {
+	if (adreno_is_a640_family(adreno_dev) ||
+		adreno_is_a650_family(adreno_dev)) {
 		kgsl_regwrite(device, A6XX_CP_ROQ_THRESHOLDS_2, 0x02000140);
 		kgsl_regwrite(device, A6XX_CP_ROQ_THRESHOLDS_1, 0x8040362C);
 	} else if (adreno_is_a612(adreno_dev) || adreno_is_a610(adreno_dev) ||
@@ -1132,12 +1161,15 @@ static int64_t a6xx_read_throttling_counters(struct adreno_device *adreno_dev)
 static int a6xx_reset(struct kgsl_device *device, int fault)
 {
 	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
-	int ret = -EINVAL;
-	int i = 0;
+	int ret;
+	unsigned long flags = device->pwrctrl.ctrl_flags;
 
 	/* Use the regular reset sequence for No GMU */
 	if (!gmu_core_isenabled(device))
 		return adreno_reset(device, fault);
+
+	/* Clear ctrl_flags to ensure clocks and regulators are turned off */
+	device->pwrctrl.ctrl_flags = 0;
 
 	/* Transition from ACTIVE to RESET state */
 	kgsl_pwrctrl_change_state(device, KGSL_STATE_RESET);
@@ -1145,33 +1177,22 @@ static int a6xx_reset(struct kgsl_device *device, int fault)
 	/* since device is officially off now clear start bit */
 	clear_bit(ADRENO_DEVICE_STARTED, &adreno_dev->priv);
 
-	/* Keep trying to start the device until it works */
-	for (i = 0; i < NUM_TIMES_RESET_RETRY; i++) {
-		ret = adreno_start(device, 0);
-		if (!ret)
-			break;
-
-		msleep(20);
-	}
-
+	ret = adreno_start(device, 0);
 	if (ret)
 		return ret;
 
-	if (i != 0)
-		dev_warn(device->dev,
-			      "Device hard reset tried %d tries\n", i);
+	kgsl_pwrctrl_change_state(device, KGSL_STATE_ACTIVE);
+
+	device->pwrctrl.ctrl_flags = flags;
 
 	/*
-	 * If active_cnt is non-zero then the system was active before
-	 * going into a reset - put it back in that state
+	 * If active_cnt is zero, there is no need to keep the GPU active. So,
+	 * we should transition to SLUMBER.
 	 */
+	if (!atomic_read(&device->active_cnt))
+		kgsl_pwrctrl_change_state(device, KGSL_STATE_SLUMBER);
 
-	if (atomic_read(&device->active_cnt))
-		kgsl_pwrctrl_change_state(device, KGSL_STATE_ACTIVE);
-	else
-		kgsl_pwrctrl_change_state(device, KGSL_STATE_NAP);
-
-	return ret;
+	return 0;
 }
 
 static void a6xx_cp_hw_err_callback(struct adreno_device *adreno_dev, int bit)
@@ -2416,6 +2437,9 @@ static void a6xx_platform_setup(struct adreno_device *adreno_dev)
 	if (ADRENO_FEATURE(adreno_dev, ADRENO_IFPC))
 		adreno_dev->perfctr_ifpc_lo =
 			A6XX_GMU_CX_GMU_POWER_COUNTER_XOCLK_4_L;
+
+	if (ADRENO_FEATURE(adreno_dev, ADRENO_SPTP_PC))
+		set_bit(ADRENO_SPTP_PC_CTRL, &adreno_dev->pwrctrl_flag);
 
 	if (!ADRENO_FEATURE(adreno_dev, ADRENO_APRIV))
 		gpudev->cp_rb_cntl |= (1 << 27);

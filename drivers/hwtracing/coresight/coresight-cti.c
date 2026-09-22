@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2013-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2021, The Linux Foundation. All rights reserved.
  */
 
 #include <linux/kernel.h>
@@ -56,6 +56,7 @@ do {									\
 #define ITTRIGOUTACK		(0xEF0)
 #define ITCHIN			(0xEF4)
 #define ITTRIGIN		(0xEF8)
+#define DEVID			(0xFC8)
 
 #define CTI_MAX_TRIGGERS	(32)
 #define CTI_MAX_CHANNELS	(4)
@@ -373,7 +374,7 @@ int coresight_cti_map_trigin(struct coresight_cti *cti, int trig, int ch)
 	 */
 	if (drvdata->refcnt == 0) {
 		ret = pm_runtime_get_sync(drvdata->dev);
-		if (ret)
+		if (ret < 0)
 			goto err1;
 		ret = coresight_enable_reg_clk(drvdata->csdev);
 		if (ret)
@@ -464,7 +465,7 @@ int coresight_cti_map_trigout(struct coresight_cti *cti, int trig, int ch)
 	 */
 	if (drvdata->refcnt == 0) {
 		ret = pm_runtime_get_sync(drvdata->dev);
-		if (ret)
+		if (ret < 0)
 			goto err1;
 		ret = coresight_enable_reg_clk(drvdata->csdev);
 		if (ret)
@@ -1353,6 +1354,28 @@ static ssize_t disable_gate_store(struct device *dev,
 }
 static DEVICE_ATTR_WO(disable_gate);
 
+static ssize_t show_info_show(struct device *dev, struct device_attribute *attr,
+				char *buf)
+{
+	struct cti_drvdata *drvdata = dev_get_drvdata(dev->parent);
+	ssize_t size = 0;
+	unsigned int ctidevid, trig_num_max, ch_num_max;
+
+	pm_runtime_get_sync(drvdata->dev);
+
+	ctidevid = cti_readl(drvdata, DEVID);
+	trig_num_max = (ctidevid & GENMASK(15, 8)) >> 8;
+	ch_num_max = (ctidevid & GENMASK(21, 16)) >> 16;
+
+	pm_runtime_put(drvdata->dev);
+
+	size = scnprintf(&buf[size], PAGE_SIZE, "%d %d\n",
+			trig_num_max, ch_num_max);
+
+	return size;
+}
+static DEVICE_ATTR_RO(show_info);
+
 static struct attribute *cti_attrs[] = {
 	&dev_attr_show_trigin.attr,
 	&dev_attr_show_trigout.attr,
@@ -1369,6 +1392,7 @@ static struct attribute *cti_attrs[] = {
 	&dev_attr_show_gate.attr,
 	&dev_attr_enable_gate.attr,
 	&dev_attr_disable_gate.attr,
+	&dev_attr_show_info.attr,
 	NULL,
 };
 
@@ -1458,7 +1482,7 @@ static int cti_init_save(struct cti_drvdata *drvdata,
 	}
 	if (drvdata->cti_save && !drvdata->cti_hwclk) {
 		ret = pm_runtime_get_sync(drvdata->dev);
-		if (ret)
+		if (ret < 0)
 			return ret;
 	}
 

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
-/* Copyright (c) 2012-2020, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/slab.h>
@@ -1069,6 +1070,11 @@ void extract_dci_pkt_rsp(unsigned char *buf, int len, int data_source,
 		return;
 	}
 
+	if (token != entry->client_info.token) {
+		mutex_unlock(&driver->dci_mutex);
+		return;
+	}
+
 	mutex_lock(&entry->buffers[data_source].buf_mutex);
 	rsp_buf = entry->buffers[data_source].buf_cmd;
 
@@ -1620,7 +1626,6 @@ static int diag_send_dci_pkt(struct diag_cmd_reg_t *entry,
 		return -EIO;
 	}
 
-	mutex_lock(&driver->dci_mutex);
 	/* prepare DCI packet */
 	header.start = CONTROL_CHAR;
 	header.version = 1;
@@ -1639,7 +1644,6 @@ static int diag_send_dci_pkt(struct diag_cmd_reg_t *entry,
 		diag_update_pkt_buffer(driver->apps_dci_buf, write_len,
 				       DCI_PKT_TYPE);
 		diag_update_sleeping_process(entry->pid, DCI_PKT_TYPE);
-		mutex_unlock(&driver->dci_mutex);
 		return DIAG_DCI_NO_ERROR;
 	}
 
@@ -1659,7 +1663,6 @@ static int diag_send_dci_pkt(struct diag_cmd_reg_t *entry,
 		       entry->proc);
 		status = DIAG_DCI_SEND_DATA_FAIL;
 	}
-	mutex_unlock(&driver->dci_mutex);
 	return status;
 }
 
@@ -1740,7 +1743,16 @@ static int diag_send_dci_pkt_remote(unsigned char *data, int len, int tag,
 	write_len += dci_header_size;
 	*(int *)(buf + write_len) = tag;
 	write_len += sizeof(int);
-	memcpy(buf + write_len, data, len);
+	if ((write_len + len) < DIAG_MDM_BUF_SIZE) {
+		memcpy(buf + write_len, data, len);
+	} else {
+		pr_err("diag: skip writing invalid length packet, token: %d, pkt_len: %d\n",
+			token, (write_len + len));
+		spin_lock_irqsave(&driver->dci_mempool_lock, flags);
+		diagmem_free(driver, buf, dci_ops_tbl[token].mempool);
+		spin_unlock_irqrestore(&driver->dci_mempool_lock, flags);
+		return -EAGAIN;
+	}
 	write_len += len;
 	*(buf + write_len) = CONTROL_CHAR; /* End Terminator */
 	write_len += sizeof(uint8_t);
@@ -1975,12 +1987,13 @@ static int diag_process_dci_pkt_rsp(unsigned char *buf, int len)
 {
 	int ret = DIAG_DCI_TABLE_ERR;
 	int common_cmd = 0, header_len = 0;
+	int req_tag = 0;
 	struct diag_pkt_header_t *header = NULL;
 	unsigned char *temp = buf;
 	unsigned char *req_buf = NULL;
 	uint8_t retry_count = 0, max_retries = 3;
 	uint32_t read_len = 0, req_len = len;
-	struct dci_pkt_req_entry_t *req_entry = NULL;
+	struct dci_pkt_req_entry_t *req_entry = NULL, *test_entry = NULL;
 	struct diag_dci_client_tbl *dci_entry = NULL;
 	struct dci_pkt_req_t req_hdr;
 	struct diag_cmd_reg_t *reg_item;
@@ -2085,6 +2098,7 @@ static int diag_process_dci_pkt_rsp(unsigned char *buf, int len)
 		mutex_unlock(&driver->dci_mutex);
 		return DIAG_DCI_NO_REG;
 	}
+	req_tag = req_entry->tag;
 	mutex_unlock(&driver->dci_mutex);
 
 	/*
@@ -2092,14 +2106,14 @@ static int diag_process_dci_pkt_rsp(unsigned char *buf, int len)
 	 * remote processor
 	 */
 	if (dci_entry->client_info.token > 0) {
-		ret = diag_send_dci_pkt_remote(req_buf, req_len, req_entry->tag,
+		ret = diag_send_dci_pkt_remote(req_buf, req_len, req_tag,
 					       dci_entry->client_info.token);
 		return ret;
 	}
 
 	/* Check if it is a dedicated Apps command */
 	ret = diag_dci_process_apps_pkt(header, req_buf, req_len,
-					req_entry->tag, header_len);
+					req_tag, header_len);
 	if ((ret == DIAG_DCI_NO_ERROR && !common_cmd) || ret < 0)
 		return ret;
 
@@ -2122,8 +2136,14 @@ static int diag_process_dci_pkt_rsp(unsigned char *buf, int len)
 	if (temp_entry) {
 		reg_item = container_of(temp_entry, struct diag_cmd_reg_t,
 								entry);
-		ret = diag_send_dci_pkt(reg_item, req_buf, req_len,
-					req_entry->tag);
+		mutex_lock(&driver->dci_mutex);
+		test_entry = diag_dci_get_request_entry(req_tag);
+		if (test_entry)
+			ret = diag_send_dci_pkt(reg_item, req_buf, req_len,
+					test_entry->tag);
+		else
+			ret = -EIO;
+		mutex_unlock(&driver->dci_mutex);
 	} else {
 		DIAG_LOG(DIAG_DEBUG_DCI, "Command not found: %02x %02x %02x\n",
 				reg_entry.cmd_code, reg_entry.subsys_id,
@@ -3016,6 +3036,8 @@ int diag_dci_register_client(struct diag_dci_reg_tbl_t *reg_entry)
 	int i, err = 0;
 	struct diag_dci_client_tbl *new_entry = NULL;
 	struct diag_dci_buf_peripheral_t *proc_buf = NULL;
+	struct pid *pid_struct = NULL;
+	struct task_struct *task_s = NULL;
 
 	if (!reg_entry)
 		return DIAG_DCI_NO_REG;
@@ -3031,14 +3053,25 @@ int diag_dci_register_client(struct diag_dci_reg_tbl_t *reg_entry)
 	if (driver->num_dci_client >= MAX_DCI_CLIENTS)
 		return DIAG_DCI_NO_REG;
 
-	new_entry = kzalloc(sizeof(struct diag_dci_client_tbl), GFP_KERNEL);
-	if (!new_entry)
+	pid_struct = find_get_pid(current->tgid);
+	if (!pid_struct)
 		return DIAG_DCI_NO_REG;
+	task_s = get_pid_task(pid_struct, PIDTYPE_PID);
+	if (!task_s) {
+		put_pid(pid_struct);
+		return DIAG_DCI_NO_REG;
+	}
+	new_entry = kzalloc(sizeof(struct diag_dci_client_tbl), GFP_KERNEL);
+	if (!new_entry) {
+		put_pid(pid_struct);
+		put_task_struct(task_s);
+		return DIAG_DCI_NO_REG;
+	}
+
+	get_task_struct(task_s);
 
 	mutex_lock(&driver->dci_mutex);
-
-	get_task_struct(current);
-	new_entry->client = current;
+	new_entry->client = task_s;
 	new_entry->tgid = current->tgid;
 	new_entry->client_info.notification_list =
 				reg_entry->notification_list;
@@ -3128,7 +3161,8 @@ int diag_dci_register_client(struct diag_dci_reg_tbl_t *reg_entry)
 		diag_update_proc_vote(DIAG_PROC_DCI, VOTE_UP, reg_entry->token);
 	queue_work(driver->diag_real_time_wq, &driver->diag_real_time_work);
 	mutex_unlock(&driver->dci_mutex);
-
+	put_pid(pid_struct);
+	put_task_struct(task_s);
 	return reg_entry->client_id;
 
 fail_alloc:
@@ -3167,6 +3201,9 @@ fail_alloc:
 	}
 	put_task_struct(current);
 	mutex_unlock(&driver->dci_mutex);
+	put_task_struct(task_s);
+	put_task_struct(task_s);
+	put_pid(pid_struct);
 	return DIAG_DCI_NO_REG;
 }
 

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
  */
 
 #include "ipa_i.h"
@@ -222,6 +222,9 @@ static int ipa_translate_flt_tbl_to_hw_fmt(enum ipa_ip_type ip,
 			/* only body (no header) */
 			tbl_mem.size = tbl->sz[rlt] -
 				ipahal_get_hw_tbl_hdr_width();
+			/* Add prefetech buf size. */
+			tbl_mem.size +=
+				ipahal_get_hw_prefetch_buf_size();
 			if (ipahal_fltrt_allocate_hw_sys_tbl(&tbl_mem)) {
 				IPAERR("fail to alloc sys tbl of size %d\n",
 					tbl_mem.size);
@@ -939,7 +942,10 @@ static int __ipa_finish_flt_rule_add(struct ipa3_flt_tbl *tbl,
 {
 	int id;
 
-	tbl->rule_cnt++;
+	if (tbl->rule_cnt < IPA_RULE_CNT_MAX)
+		tbl->rule_cnt++;
+	else
+		return -EINVAL;
 	if (entry->rt_tbl)
 		entry->rt_tbl->ref_cnt++;
 	id = ipa3_id_alloc(entry);
@@ -1067,7 +1073,7 @@ static int __ipa_del_flt_rule(u32 rule_hdl)
 
 	list_del(&entry->link);
 	entry->tbl->rule_cnt--;
-	if (entry->rt_tbl)
+	if (entry->rt_tbl && !ipa3_check_idr_if_freed(entry->rt_tbl))
 		entry->rt_tbl->ref_cnt--;
 	IPADBG("del flt rule rule_cnt=%d rule_id=%d\n",
 		entry->tbl->rule_cnt, entry->rule_id);
@@ -1693,17 +1699,23 @@ int ipa3_mdfy_flt_rule(struct ipa_ioc_mdfy_flt_rule *hdls)
 	}
 
 	mutex_lock(&ipa3_ctx->lock);
+
 	for (i = 0; i < hdls->num_rules; i++) {
 		/* if hashing not supported, all tables are non-hash tables*/
 		if (ipa3_ctx->ipa_fltrt_not_hashable)
 			hdls->rules[i].rule.hashable = false;
+
 		__ipa_convert_flt_mdfy_in(hdls->rules[i], &rule);
-		if (__ipa_mdfy_flt_rule(&rule, hdls->ip)) {
-			IPAERR_RL("failed to mdfy flt rule %i\n", i);
+
+		result = __ipa_mdfy_flt_rule(&rule, hdls->ip);
+
+		__ipa_convert_flt_mdfy_out(rule, &hdls->rules[i]);
+
+		if (result) {
+			IPAERR_RL("failed to mdfy flt rule %d\n", i);
 			hdls->rules[i].status = IPA_FLT_STATUS_OF_MDFY_FAILED;
 		} else {
 			hdls->rules[i].status = 0;
-			__ipa_convert_flt_mdfy_out(rule, &hdls->rules[i]);
 		}
 	}
 

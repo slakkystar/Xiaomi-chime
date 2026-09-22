@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Copyright (c) 2002,2007-2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2002,2007-2021, The Linux Foundation. All rights reserved.
  */
 
 #define ANY_ID (~0)
@@ -272,9 +272,9 @@ static const struct adreno_reglist a50x_hwcg_regs[] = {
 	{A5XX_RBBM_CLOCK_DELAY_VFD, 0x00002222}
 };
 
-static const struct adreno_a5xx_core adreno_gpu_core_a505 = {
+static const struct adreno_a5xx_core adreno_gpu_core_a504 = {
 	.base = {
-		DEFINE_ADRENO_REV(ADRENO_REV_A505, 5, 0, 5, ANY_ID),
+		DEFINE_ADRENO_REV(ADRENO_REV_A504, 5, 0, 4, ANY_ID),
 		.features = ADRENO_PREEMPTION | ADRENO_64BIT,
 		.gpudev = &adreno_a5xx_gpudev,
 		.gmem_size = (SZ_128K + SZ_8K),
@@ -283,6 +283,25 @@ static const struct adreno_a5xx_core adreno_gpu_core_a505 = {
 	},
 	.pm4fw_name = "a530_pm4.fw",
 	.pfpfw_name = "a530_pfp.fw",
+	.hwcg = a50x_hwcg_regs,
+	.hwcg_count = ARRAY_SIZE(a50x_hwcg_regs),
+	.vbif = a530_vbif_regs,
+	.vbif_count = ARRAY_SIZE(a530_vbif_regs),
+};
+
+static const struct adreno_a5xx_core adreno_gpu_core_a505 = {
+	.base = {
+		DEFINE_ADRENO_REV(ADRENO_REV_A505, 5, 0, 5, ANY_ID),
+		.features = ADRENO_PREEMPTION | ADRENO_64BIT |
+			ADRENO_CONTENT_PROTECTION | ADRENO_CPZ_RETENTION,
+		.gpudev = &adreno_a5xx_gpudev,
+		.gmem_size = (SZ_128K + SZ_8K),
+		.busy_mask = 0xfffffffe,
+		.bus_width = 16,
+	},
+	.pm4fw_name = "a530_pm4.fw",
+	.pfpfw_name = "a530_pfp.fw",
+	.zap_name = "a506_zap",
 	.hwcg = a50x_hwcg_regs,
 	.hwcg_count = ARRAY_SIZE(a50x_hwcg_regs),
 	.vbif = a530_vbif_regs,
@@ -771,7 +790,6 @@ static const struct adreno_a6xx_core adreno_gpu_core_a630v2 = {
 		.bus_width = 32,
 	},
 	.prim_fifo_threshold = 0x0018000,
-	.pdc_address_offset = 0x00030080,
 	.gmu_major = 1,
 	.gmu_minor = 3,
 	.sqefw_name = "a630_sqe.fw",
@@ -869,7 +887,6 @@ static const struct adreno_a6xx_core adreno_gpu_core_a615 = {
 		.bus_width = 32,
 	},
 	.prim_fifo_threshold = 0x0018000,
-	.pdc_address_offset = 0x00030080,
 	.gmu_major = 1,
 	.gmu_minor = 3,
 	.sqefw_name = "a630_sqe.fw",
@@ -895,7 +912,6 @@ static const struct adreno_a6xx_core adreno_gpu_core_a618 = {
 		.bus_width = 32,
 	},
 	.prim_fifo_threshold = 0x0018000,
-	.pdc_address_offset = 0x00030090,
 	.gmu_major = 1,
 	.gmu_minor = 7,
 	.sqefw_name = "a630_sqe.fw",
@@ -921,9 +937,8 @@ static const struct adreno_a6xx_core adreno_gpu_core_a619 = {
 		.bus_width = 32,
 	},
 	.prim_fifo_threshold = 0x0018000,
-	.pdc_address_offset = 0x000300a0,
 	.gmu_major = 1,
-	.gmu_minor = 9,
+	.gmu_minor = 11,
 	.sqefw_name = "a630_sqe.fw",
 	.gmufw_name = "a619_gmu.bin",
 	.zap_name = "a615_zap",
@@ -1049,7 +1064,6 @@ static const struct adreno_a6xx_core adreno_gpu_core_a620 = {
 		.bus_width = 32,
 	},
 	.prim_fifo_threshold = 0x0010000,
-	.pdc_address_offset = 0x000300a0,
 	.gmu_major = 2,
 	.gmu_minor = 0,
 	.sqefw_name = "a650_sqe.fw",
@@ -1138,7 +1152,6 @@ static const struct adreno_a6xx_core adreno_gpu_core_a640 = {
 		.bus_width = 32,
 	},
 	.prim_fifo_threshold = 0x00200000,
-	.pdc_address_offset = 0x00030090,
 	.gmu_major = 2,
 	.gmu_minor = 0,
 	.sqefw_name = "a630_sqe.fw",
@@ -1217,7 +1230,6 @@ static const struct adreno_a6xx_core adreno_gpu_core_a650 = {
 		.bus_width = 32,
 	},
 	.prim_fifo_threshold = 0x00300000,
-	.pdc_address_offset = 0x000300A0,
 	.gmu_major = 2,
 	.gmu_minor = 0,
 	.sqefw_name = "a650_sqe.fw",
@@ -1247,7 +1259,6 @@ static const struct adreno_a6xx_core adreno_gpu_core_a650v2 = {
 		.bus_width = 32,
 	},
 	.prim_fifo_threshold = 0x00300000,
-	.pdc_address_offset = 0x000300A0,
 	.gmu_major = 2,
 	.gmu_minor = 0,
 	.sqefw_name = "a650_sqe.fw",
@@ -1274,7 +1285,6 @@ static const struct adreno_a6xx_core adreno_gpu_core_a680 = {
 		.bus_width = 32,
 	},
 	.prim_fifo_threshold = 0x00400000,
-	.pdc_address_offset = 0x00030090,
 	.gmu_major = 2,
 	.gmu_minor = 0,
 	.sqefw_name = "a630_sqe.fw",
@@ -1350,7 +1360,6 @@ static const struct adreno_a6xx_core adreno_gpu_core_a612 = {
 		.bus_width = 32,
 	},
 	.prim_fifo_threshold = 0x00080000,
-	.pdc_address_offset = 0x00030080,
 	.sqefw_name = "a630_sqe.fw",
 	.gmufw_name = "a612_rgmu.bin",
 	.zap_name = "a612_zap",
@@ -1374,7 +1383,6 @@ static const struct adreno_a6xx_core adreno_gpu_core_a616 = {
 		.bus_width = 32,
 	},
 	.prim_fifo_threshold = 0x0018000,
-	.pdc_address_offset = 0x00030080,
 	.gmu_major = 1,
 	.gmu_minor = 3,
 	.sqefw_name = "a630_sqe.fw",
@@ -1392,7 +1400,7 @@ static const struct adreno_a6xx_core adreno_gpu_core_a610 = {
 	.base = {
 		DEFINE_ADRENO_REV(ADRENO_REV_A610, 6, 1, 0, ANY_ID),
 		.features = ADRENO_64BIT | ADRENO_CONTENT_PROTECTION |
-			ADRENO_PREEMPTION,
+			ADRENO_PREEMPTION | ADRENO_PROCESS_RECLAIM,
 		.gpudev = &adreno_a6xx_gpudev,
 		.gmem_size = (SZ_128K + SZ_4K),
 		.busy_mask = 0xfffffffe,
@@ -1507,6 +1515,7 @@ static const struct adreno_gpu_core *adreno_gpulist[] = {
 	&adreno_gpu_core_a540v2.base,
 	&adreno_gpu_core_a512.base,
 	&adreno_gpu_core_a508.base,
+	&adreno_gpu_core_a504.base,
 	&adreno_gpu_core_a630v1,	/* Deprecated */
 	&adreno_gpu_core_a630v2.base,
 	&adreno_gpu_core_a615.base,

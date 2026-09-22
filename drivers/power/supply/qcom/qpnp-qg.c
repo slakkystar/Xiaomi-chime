@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2018-2020 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2018-2021 The Linux Foundation. All rights reserved.
  * Copyright (C) 2020 XiaoMi, Inc.
  */
 
@@ -1022,7 +1022,7 @@ static int qg_process_esr_data(struct qpnp_qg *chip)
 
 static int qg_esr_estimate(struct qpnp_qg *chip)
 {
-	int rc, i, ibat = 0;
+	int rc, i, ibat = 0, temp = 0;
 	u8 esr_done_count, reg0 = 0, reg1 = 0;
 	bool is_charging = false;
 
@@ -1047,6 +1047,17 @@ static int qg_esr_estimate(struct qpnp_qg *chip)
 	if (chip->charge_status != POWER_SUPPLY_STATUS_CHARGING &&
 			!chip->dt.esr_discharge_enable)
 		return 0;
+
+	/* Ignore ESR if battery-temp is below a threshold */
+	rc = qg_get_battery_temp(chip, &temp);
+	if (rc < 0)
+		return rc;
+	if (temp < chip->dt.esr_low_temp_threshold) {
+		qg_dbg(chip, QG_DEBUG_ESR,
+			"Battery temperature(%d) below threshold(%d) for ESR\n",
+				temp, chip->dt.esr_low_temp_threshold);
+		return 0;
+	}
 
 	if (chip->batt_soc != INT_MIN && (chip->batt_soc <
 					chip->dt.esr_disable_soc)) {
@@ -1210,6 +1221,9 @@ static void process_udata_work(struct work_struct *work)
 
 	if (chip->udata.param[QG_V_IBAT].valid)
 		chip->qg_v_ibat = chip->udata.param[QG_V_IBAT].data;
+
+	if (chip->udata.param[QG_CHARGE_COUNTER].valid)
+		chip->qg_charge_counter = chip->udata.param[QG_CHARGE_COUNTER].data;
 
 	if (chip->udata.param[QG_SOC].valid ||
 			chip->udata.param[QG_SYS_SOC].valid) {
@@ -2037,6 +2051,7 @@ done:
 static int qg_setprop_batt_age_level(struct qpnp_qg *chip, int batt_age_level)
 {
 	int rc = 0;
+	u16 data = 0;
 
 	if (!chip->dt.multi_profile_load)
 		return 0;
@@ -2061,6 +2076,13 @@ static int qg_setprop_batt_age_level(struct qpnp_qg *chip, int batt_age_level)
 		if (rc < 0)
 			pr_err("error in storing batt_age_level rc =%d\n", rc);
 	}
+
+	/* Clear the learned capacity on loading a new profile */
+	rc = qg_sdam_multibyte_write(QG_SDAM_LEARNED_CAPACITY_OFFSET,
+						(u8 *)&data, 2);
+
+	if (rc < 0)
+		pr_err("Failed to clear SDAM learnt capacity rc=%d\n", rc);
 
 	qg_dbg(chip, QG_DEBUG_PROFILE, "Profile with batt_age_level = %d loaded\n",
 						chip->batt_age_level);
@@ -2101,6 +2123,9 @@ static int qg_psy_set_property(struct power_supply *psy,
 				chip->soh, chip->esr_actual, chip->esr_nominal);
 		if (chip->sp)
 			soh_profile_update(chip->sp, chip->soh);
+		break;
+	case POWER_SUPPLY_PROP_CLEAR_SOH:
+		chip->first_profile_load = pval->intval;
 		break;
 	case POWER_SUPPLY_PROP_ESR_ACTUAL:
 		chip->esr_actual = pval->intval;
@@ -2193,6 +2218,9 @@ static int qg_psy_get_property(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_CHARGE_COUNTER:
 		rc = qg_get_charge_counter(chip, &pval->intval);
 		break;
+	case POWER_SUPPLY_PROP_CHARGE_COUNTER_SHADOW:
+		pval->intval = chip->qg_charge_counter;
+		break;
 	case POWER_SUPPLY_PROP_CHARGE_FULL:
 		if (!chip->dt.cl_disable && chip->dt.cl_feedback_on)
 			rc = qg_get_learned_capacity(chip, &temp);
@@ -2215,6 +2243,9 @@ static int qg_psy_get_property(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_TIME_TO_FULL_AVG:
 		rc = ttf_get_time_to_full(chip->ttf, &pval->intval);
 		break;
+	case POWER_SUPPLY_PROP_TIME_TO_FULL_NOW:
+		rc = ttf_get_time_to_full(chip->ttf, &pval->intval);
+		break;
 	case POWER_SUPPLY_PROP_TIME_TO_EMPTY_AVG:
 		rc = ttf_get_time_to_empty(chip->ttf, &pval->intval);
 		break;
@@ -2228,6 +2259,9 @@ static int qg_psy_get_property(struct power_supply *psy,
 		break;
 	case POWER_SUPPLY_PROP_SOH:
 		pval->intval = chip->soh;
+		break;
+	case POWER_SUPPLY_PROP_CLEAR_SOH:
+		pval->intval = chip->first_profile_load;
 		break;
 	case POWER_SUPPLY_PROP_CC_SOC:
 		rc = qg_get_cc_soc(chip, &pval->intval);
@@ -2271,6 +2305,7 @@ static int qg_property_is_writeable(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_SOH:
 	case POWER_SUPPLY_PROP_FG_RESET:
 	case POWER_SUPPLY_PROP_BATT_AGE_LEVEL:
+	case POWER_SUPPLY_PROP_CLEAR_SOH:
 		return 1;
 	default:
 		break;
@@ -2288,6 +2323,7 @@ static enum power_supply_property qg_psy_props[] = {
 	POWER_SUPPLY_PROP_VOLTAGE_OCV,
 	POWER_SUPPLY_PROP_CURRENT_NOW,
 	POWER_SUPPLY_PROP_CHARGE_COUNTER,
+	POWER_SUPPLY_PROP_CHARGE_COUNTER_SHADOW,
 	POWER_SUPPLY_PROP_RESISTANCE,
 	POWER_SUPPLY_PROP_RESISTANCE_ID,
 	POWER_SUPPLY_PROP_RESISTANCE_NOW,
@@ -2304,10 +2340,12 @@ static enum power_supply_property qg_psy_props[] = {
 	POWER_SUPPLY_PROP_CHARGE_FULL,
 	POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN,
 	POWER_SUPPLY_PROP_TIME_TO_FULL_AVG,
+	POWER_SUPPLY_PROP_TIME_TO_FULL_NOW,
 	POWER_SUPPLY_PROP_TIME_TO_EMPTY_AVG,
 	POWER_SUPPLY_PROP_ESR_ACTUAL,
 	POWER_SUPPLY_PROP_ESR_NOMINAL,
 	POWER_SUPPLY_PROP_SOH,
+	POWER_SUPPLY_PROP_CLEAR_SOH,
 	POWER_SUPPLY_PROP_CC_SOC,
 	POWER_SUPPLY_PROP_FG_RESET,
 	POWER_SUPPLY_PROP_VOLTAGE_AVG,
@@ -2445,13 +2483,15 @@ static int qg_parallel_status_update(struct qpnp_qg *chip)
 		"Parallel status changed Enabled=%d\n", parallel_enabled);
 
 	mutex_lock(&chip->data_lock);
-
 	/*
-	 * Parallel charger uses the same external sense, hence do not
-	 * enable SMB sensing if PMI632 is configured for external sense.
+	 * dt.qg_ext_sense = Uses external rsense, if defined do not
+	 *		     enable SMB sensing (for non-CP parallel charger).
+	 * dt.cp_iin_sns = Uses CP IIN_SNS, enable SMB sensing (for CP charger).
 	 */
-	if (!chip->dt.qg_ext_sense)
-		update_smb = true;
+	if (is_cp_available(chip))
+		update_smb = chip->dt.use_cp_iin_sns ? true : false;
+	else if (is_parallel_available(chip))
+		update_smb = chip->dt.qg_ext_sense ? false : true;
 
 	rc = process_rt_fifo_data(chip, update_smb);
 	if (rc < 0)
@@ -2703,7 +2743,8 @@ static int qg_notifier_cb(struct notifier_block *nb,
 	if ((strcmp(psy->desc->name, "battery") == 0)
 		|| (strcmp(psy->desc->name, "parallel") == 0)
 		|| (strcmp(psy->desc->name, "usb") == 0)
-		|| (strcmp(psy->desc->name, "dc") == 0)) {
+		|| (strcmp(psy->desc->name, "dc") == 0)
+		|| (strcmp(psy->desc->name, "charge_pump_master") == 0)) {
 		/*
 		 * We cannot vote for awake votable here as that takes
 		 * a mutex lock and this is executed in an atomic context.
@@ -3408,6 +3449,7 @@ static int qg_sanitize_sdam(struct qpnp_qg *chip)
 		rc = qg_sdam_write(SDAM_MAGIC, SDAM_MAGIC_NUMBER);
 		if (!rc)
 			qg_dbg(chip, QG_DEBUG_PON, "First boot. SDAM initilized\n");
+		chip->first_profile_load = true;
 	} else {
 		/* SDAM has invalid value */
 		rc = qg_sdam_clear();
@@ -3415,6 +3457,7 @@ static int qg_sanitize_sdam(struct qpnp_qg *chip)
 			pr_err("SDAM uninitialized, SDAM reset\n");
 			rc = qg_sdam_write(SDAM_MAGIC, SDAM_MAGIC_NUMBER);
 		}
+		chip->first_profile_load = true;
 	}
 
 	if (rc < 0)
@@ -4127,6 +4170,7 @@ static int qg_parse_cl_dt(struct qpnp_qg *chip)
 #define DEFAULT_SYS_MIN_VOLT_MV		2800
 #define DEFAULT_FVSS_VBAT_MV		3500
 #define DEFAULT_TCSS_ENTRY_SOC		90
+#define DEFAULT_ESR_LOW_TEMP_THRESHOLD	100 /* 10 deg */
 static int qg_parse_dt(struct qpnp_qg *chip)
 {
 	int rc = 0;
@@ -4303,7 +4347,7 @@ static int qg_parse_dt(struct qpnp_qg *chip)
 	if (rc < 0)
 		chip->dt.rbat_conn_mohm = 0;
 	else
-		chip->dt.rbat_conn_mohm = temp;
+		chip->dt.rbat_conn_mohm = (int)temp;
 
 	/* esr */
 	chip->dt.esr_disable = of_property_read_bool(node,
@@ -4336,7 +4380,14 @@ static int qg_parse_dt(struct qpnp_qg *chip)
 	else
 		chip->dt.esr_min_ibat_ua = (int)temp;
 
-	rc = of_property_read_u32(node, "qcom,shutdown_soc_threshold", &temp);
+	rc = of_property_read_u32(node, "qcom,esr-low-temp-threshold", &temp);
+	if (rc < 0)
+		chip->dt.esr_low_temp_threshold =
+					DEFAULT_ESR_LOW_TEMP_THRESHOLD;
+	else
+		chip->dt.esr_low_temp_threshold = (int)temp;
+
+	rc = of_property_read_u32(node, "qcom,shutdown-soc-threshold", &temp);
 	if (rc < 0)
 		chip->dt.shutdown_soc_threshold = -EINVAL;
 	else
@@ -4349,6 +4400,9 @@ static int qg_parse_dt(struct qpnp_qg *chip)
 		chip->dt.sys_min_volt_mv = temp;
 
 	chip->dt.qg_ext_sense = of_property_read_bool(node, "qcom,qg-ext-sns");
+
+	chip->dt.use_cp_iin_sns = of_property_read_bool(node,
+							"qcom,use-cp-iin-sns");
 
 	chip->dt.use_s7_ocv = of_property_read_bool(node, "qcom,qg-use-s7-ocv");
 
@@ -4693,6 +4747,18 @@ static int qpnp_qg_probe(struct platform_device *pdev)
 	chip->esr_actual = -EINVAL;
 	chip->esr_nominal = -EINVAL;
 	chip->batt_age_level = -EINVAL;
+	chip->qg_charge_counter = -EINVAL;
+
+	chip->qg_version = (u8)of_device_get_match_data(&pdev->dev);
+
+	switch (chip->qg_version) {
+	case QG_LITE:
+		chip->max_fifo_length = 5;
+		break;
+	default:
+		chip->max_fifo_length = 8;
+		break;
+	}
 
 	chip->qg_version = (u8)of_device_get_match_data(&pdev->dev);
 

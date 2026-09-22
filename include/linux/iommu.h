@@ -177,10 +177,11 @@ enum iommu_attr {
 	DOMAIN_ATTR_EARLY_MAP,
 	DOMAIN_ATTR_PAGE_TABLE_IS_COHERENT,
 	DOMAIN_ATTR_PAGE_TABLE_FORCE_COHERENT,
-	DOMAIN_ATTR_CB_STALL_DISABLE,
 	DOMAIN_ATTR_BITMAP_IOVA_ALLOCATOR,
 	DOMAIN_ATTR_USE_LLC_NWA,
-	DOMAIN_ATTR_NO_CFRE,
+	DOMAIN_ATTR_FAULT_MODEL_NO_CFRE,
+	DOMAIN_ATTR_FAULT_MODEL_NO_STALL,
+	DOMAIN_ATTR_FAULT_MODEL_HUPCF,
 	DOMAIN_ATTR_MAX,
 };
 
@@ -266,7 +267,7 @@ struct iommu_ops {
 	size_t (*unmap)(struct iommu_domain *domain, unsigned long iova,
 		     size_t size);
 	size_t (*map_sg)(struct iommu_domain *domain, unsigned long iova,
-                        struct scatterlist *sg, unsigned int nents, int prot);
+			 struct scatterlist *sg, unsigned int nents, int prot);
 	void (*flush_iotlb_all)(struct iommu_domain *domain);
 	void (*iotlb_range_add)(struct iommu_domain *domain,
 				unsigned long iova, size_t size);

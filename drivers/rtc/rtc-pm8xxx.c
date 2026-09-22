@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2010-2011, 2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2010-2011, 2020-2021, The Linux Foundation. All rights reserved.
  */
 
 #include <linux/of.h>
@@ -22,6 +22,7 @@
 /* RTC_CTRL register bit fields */
 #define PM8xxx_RTC_ENABLE		BIT(7)
 #define PM8xxx_RTC_ALARM_CLEAR		BIT(0)
+#define PM8xxx_RTC_ALARM_ENABLE		BIT(7)
 
 #define NUM_8_BIT_RTC_REGS		0x4
 
@@ -207,7 +208,8 @@ static int pm8xxx_rtc_read_time(struct device *dev, struct rtc_time *tm)
 		}
 	}
 
-	secs = value[0] | (value[1] << 8) | (value[2] << 16) | (value[3] << 24);
+	secs = value[0] | (value[1] << 8) | (value[2] << 16) |
+	       ((unsigned long)value[3] << 24);
 
 	rtc_time_to_tm(secs, tm);
 
@@ -282,7 +284,8 @@ static int pm8xxx_rtc_read_alarm(struct device *dev, struct rtc_wkalrm *alarm)
 		return rc;
 	}
 
-	secs = value[0] | (value[1] << 8) | (value[2] << 16) | (value[3] << 24);
+	secs = value[0] | (value[1] << 8) | (value[2] << 16) |
+	       ((unsigned long)value[3] << 24);
 
 	rtc_time_to_tm(secs, &alarm->time);
 
@@ -296,6 +299,14 @@ static int pm8xxx_rtc_read_alarm(struct device *dev, struct rtc_wkalrm *alarm)
 		alarm->time.tm_hour, alarm->time.tm_min,
 		alarm->time.tm_sec, alarm->time.tm_mday,
 		alarm->time.tm_mon, alarm->time.tm_year);
+
+	rc = regmap_bulk_read(rtc_dd->regmap, regs->alarm_ctrl, value, 1);
+	if (rc) {
+		dev_err(dev, "Read from ALARM CTRL1 failed\n");
+		return rc;
+	}
+
+	alarm->enabled = !!(value[0] & PM8xxx_RTC_ALARM_ENABLE);
 
 	return 0;
 }
@@ -459,6 +470,16 @@ static const struct pm8xxx_rtc_regs pmk8350_regs = {
 	.alarm_en	= BIT(7),
 };
 
+static const struct pm8xxx_rtc_regs pm8916_regs = {
+	.ctrl		= 0x6046,
+	.write		= 0x6040,
+	.read		= 0x6048,
+	.alarm_rw	= 0x6140,
+	.alarm_ctrl	= 0x6146,
+	.alarm_ctrl2	= 0x6148,
+	.alarm_en	= BIT(7),
+};
+
 /*
  * Hardcoded RTC bases until IORESOURCE_REG mapping is figured out
  */
@@ -468,6 +489,7 @@ static const struct of_device_id pm8xxx_id_table[] = {
 	{ .compatible = "qcom,pm8058-rtc", .data = &pm8058_regs },
 	{ .compatible = "qcom,pm8941-rtc", .data = &pm8941_regs },
 	{ .compatible = "qcom,pmk8350-rtc", .data = &pmk8350_regs },
+	{ .compatible = "qcom,pm8916-rtc", .data = &pm8916_regs },
 	{ },
 };
 MODULE_DEVICE_TABLE(of, pm8xxx_id_table);

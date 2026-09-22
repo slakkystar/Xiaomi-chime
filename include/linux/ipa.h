@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2020, The Linux Foundation. All rights reserved.
  */
 
 #ifndef _IPA_H_
@@ -11,6 +11,7 @@
 #include <linux/types.h>
 #include <linux/if_ether.h>
 #include "linux/msm_gsi.h"
+#include <linux/msm-sps.h>
 
 #define IPA_APPS_MAX_BW_IN_MBPS 700
 #define IPA_BW_THRESHOLD_MAX 3
@@ -97,6 +98,8 @@ enum ipa_aggr_mode {
 enum ipa_dp_evt_type {
 	IPA_RECEIVE,
 	IPA_WRITE_DONE,
+	IPA_CLIENT_START_POLL,
+	IPA_CLIENT_COMP_NAPI,
 };
 
 /**
@@ -350,18 +353,28 @@ struct ipa_ep_cfg_holb {
  * struct ipa_ep_cfg_deaggr - deaggregation configuration in IPA end-point
  * @deaggr_hdr_len: Deaggregation Header length in bytes. Valid only for Input
  *	Pipes, which are configured for 'Generic' deaggregation.
+ * @syspipe_err_detection - If set to 1, enables error detection for
+ *	de-aggregration. Valid only for Input Pipes, which are configured
+ *	for 'Generic' deaggregation.
+ *	Note: if this bit is set, de-aggregated frames must be contiguous
+ *	in memory.
  * @packet_offset_valid: - 0: PACKET_OFFSET is not used, 1: PACKET_OFFSET is
  *	used.
  * @packet_offset_location: Location of packet offset field, which specifies
  *	the offset to the packet from the start of the packet offset field.
+ * @ignore_min_pkt_err - Ignore packets smaller than header. This is intended
+ *	for use in RNDIS de-aggregated pipes, to silently ignore a redundant
+ *	1-byte trailer in MSFT implementation.
  * @max_packet_len: DEAGGR Max Packet Length in Bytes. A Packet with higher
  *	size wil be treated as an error. 0 - Packet Length is not Bound,
  *	IPA should not check for a Max Packet Length.
  */
 struct ipa_ep_cfg_deaggr {
 	u32 deaggr_hdr_len;
+	bool syspipe_err_detection;
 	bool packet_offset_valid;
 	u32 packet_offset_location;
+	bool ignore_min_pkt_err;
 	u32 max_packet_len;
 };
 
@@ -562,6 +575,60 @@ struct ipa_inform_wlan_bw {
 typedef void (*ipa_wdi_meter_notifier_cb)(enum ipa_wdi_meter_evt_type evt,
 		       void *data);
 
+/**
+ * struct ipa_connect_params - low-level client connect input parameters. Either
+ * client allocates the data and desc FIFO and specifies that in data+desc OR
+ * specifies sizes and pipe_mem pref and IPA does the allocation.
+ *
+ * @ipa_ep_cfg:	IPA EP configuration
+ * @client:	type of "client"
+ * @client_bam_hdl:	 client SPS handle
+ * @client_ep_idx:	 client PER EP index
+ * @priv:	callback cookie
+ * @notify:	callback
+ *		priv - callback cookie evt - type of event data - data relevant
+ *		to event.  May not be valid. See event_type enum for valid
+ *		cases.
+ * @desc_fifo_sz:	size of desc FIFO
+ * @data_fifo_sz:	size of data FIFO
+ * @pipe_mem_preferred:	if true, try to alloc the FIFOs in pipe mem, fallback
+ *			to sys mem if pipe mem alloc fails
+ * @desc:	desc FIFO meta-data when client has allocated it
+ * @data:	data FIFO meta-data when client has allocated it
+ * @skip_ep_cfg: boolean field that determines if EP should be configured
+ *  by IPA driver
+ * @keep_ipa_awake: when true, IPA will not be clock gated
+ */
+struct ipa_connect_params {
+	struct ipa_ep_cfg ipa_ep_cfg;
+	enum ipa_client_type client;
+	unsigned long client_bam_hdl;
+	u32 client_ep_idx;
+	void *priv;
+	ipa_notify_cb notify;
+	u32 desc_fifo_sz;
+	u32 data_fifo_sz;
+	bool pipe_mem_preferred;
+	struct sps_mem_buffer desc;
+	struct sps_mem_buffer data;
+	bool skip_ep_cfg;
+	bool keep_ipa_awake;
+};
+
+/**
+ *  struct ipa_sps_params - SPS related output parameters resulting from
+ *  low/high level client connect
+ *  @ipa_bam_hdl:	IPA SPS handle
+ *  @ipa_ep_idx:	IPA PER EP index
+ *  @desc:	desc FIFO meta-data
+ *  @data:	data FIFO meta-data
+ */
+struct ipa_sps_params {
+	unsigned long ipa_bam_hdl;
+	u32 ipa_ep_idx;
+	struct sps_mem_buffer desc;
+	struct sps_mem_buffer data;
+};
 
 /**
  * struct ipa_tx_intf - interface tx properties
@@ -627,6 +694,7 @@ struct ipa_sys_connect_params {
 	bool skip_ep_cfg;
 	bool keep_ipa_awake;
 	struct napi_struct *napi_obj;
+	bool napi_enabled;
 	bool recycle_enabled;
 };
 
@@ -838,12 +906,15 @@ struct ipa_rx_page_data {
  */
 enum ipa_irq_type {
 	IPA_BAD_SNOC_ACCESS_IRQ,
+	IPA_EOT_COAL_IRQ,
 	IPA_UC_IRQ_0,
 	IPA_UC_IRQ_1,
 	IPA_UC_IRQ_2,
 	IPA_UC_IRQ_3,
 	IPA_UC_IN_Q_NOT_EMPTY_IRQ,
 	IPA_UC_RX_CMD_Q_NOT_FULL_IRQ,
+	IPA_UC_TX_CMD_Q_NOT_FULL_IRQ,
+	IPA_UC_TO_PROC_ACK_Q_NOT_FULL_IRQ,
 	IPA_PROC_TO_UC_ACK_Q_NOT_EMPTY_IRQ,
 	IPA_RX_ERR_IRQ,
 	IPA_DEAGGR_ERR_IRQ,
@@ -852,6 +923,8 @@ enum ipa_irq_type {
 	IPA_PROC_ERR_IRQ,
 	IPA_TX_SUSPEND_IRQ,
 	IPA_TX_HOLB_DROP_IRQ,
+	IPA_BAM_IDLE_IRQ,
+	IPA_GSI_IDLE_IRQ = IPA_BAM_IDLE_IRQ,
 	IPA_BAM_GSI_IDLE_IRQ,
 	IPA_PIPE_YELLOW_MARKER_BELOW_IRQ,
 	IPA_PIPE_RED_MARKER_BELOW_IRQ,
@@ -1297,6 +1370,13 @@ struct ipa_smmu_out_params {
 #if defined CONFIG_IPA || defined CONFIG_IPA3
 
 /*
+ * Connect / Disconnect
+ */
+int ipa_connect(const struct ipa_connect_params *in, struct ipa_sps_params *sps,
+		u32 *clnt_hdl);
+int ipa_disconnect(u32 clnt_hdl);
+
+/*
  * Resume / Suspend
  */
 int ipa_reset_endpoint(u32 clnt_hdl);
@@ -1723,6 +1803,19 @@ int ipa_is_vlan_mode(enum ipa_vlan_ifaces iface, bool *res);
  */
 bool ipa_get_lan_rx_napi(void);
 #else /* (CONFIG_IPA || CONFIG_IPA3) */
+
+/* low-level IPA client Connect / Disconnect */
+
+static inline int ipa_connect(const struct ipa_connect_params *in,
+	struct ipa_sps_params *sps, u32 *clnt_hdl)
+{
+	return -EPERM;
+}
+
+static inline int ipa_disconnect(u32 clnt_hdl)
+{
+	return -EPERM;
+}
 
 /*
  * Resume / Suspend

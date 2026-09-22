@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * Copyright (c) 2012-2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
  */
 
 #ifndef _IPA3_I_H_
@@ -67,6 +67,11 @@
 #define IPA_MPM_MAX_RING_LEN 64
 #define IPA_MAX_TETH_AGGR_BYTE_LIMIT 24
 #define IPA_MPM_MAX_UC_THRESH 4
+
+#define IPA_HOLB_TMR_DIS 0x0
+#define IPA_HOLB_TMR_EN 0x1
+#define IPA_HOLB_TMR_VAL 65535
+#define IPA_HOLB_TMR_VAL_4_5 31
 /*
  * The transport descriptor size was changed to GSI_CHAN_RE_SIZE_16B, but
  * IPA users still use sps_iovec size as FIFO element size.
@@ -80,6 +85,10 @@
 #define IPA_MAX_NUM_REQ_CACHE 10
 
 #define NAPI_WEIGHT 64
+
+/* Bit alignment for IPA4.5 GSI rings */
+#define IPA_LOW_16_BIT_MASK (0xFFFF)
+#define IPA4_5_GSI_RING_SIZE_ALIGN (16 * PAGE_SIZE)
 
 #define IPADBG(fmt, args...) \
 	do { \
@@ -216,6 +225,7 @@
 #define IPA3_ACTIVE_CLIENTS_LOG_NAME_LEN 40
 #define SMEM_IPA_FILTER_TABLE 497
 
+
 enum {
 	SMEM_APPS,
 	SMEM_MODEM,
@@ -267,7 +277,7 @@ enum {
 
 #define IPA_AGGR_MAX_STR_LENGTH (10)
 
-#define CLEANUP_TAG_PROCESS_TIMEOUT 1000
+#define CLEANUP_TAG_PROCESS_TIMEOUT 5000
 
 #define IPA_AGGR_STR_IN_BYTES(str) \
 	(strnlen((str), IPA_AGGR_MAX_STR_LENGTH - 1) + 1)
@@ -451,6 +461,8 @@ enum {
 #define TZ_MEM_PROTECT_REGION_ID 0x10
 
 #define MBOX_TOUT_MS 100
+
+#define IPA_RULE_CNT_MAX 512
 
 struct ipa3_active_client_htable_entry {
 	struct hlist_node list;
@@ -1027,6 +1039,8 @@ struct ipa3_sys_context {
 	atomic_t xmit_eot_cnt;
 	struct tasklet_struct tasklet;
 	struct work_struct tasklet_work;
+	bool skip_eot;
+	u32 eob_drop_cnt;
 
 	/* ordering is important - mutable fields go above */
 	struct ipa3_ep_context *ep;
@@ -1368,6 +1382,7 @@ struct ipa3_stats {
 	u32 flow_disable;
 	u32 tx_non_linear;
 	u32 rx_page_drop_cnt;
+	u32 zero_len_frag_pkt_cnt;
 	struct ipa3_page_recycle_stats page_recycle_stats[2];
 };
 
@@ -1772,6 +1787,7 @@ struct ipa3_app_clock_vote {
  * @rt_rule_cache: routing rule cache
  * @hdr_cache: header cache
  * @hdr_offset_cache: header offset cache
+ * @fnr_stats_cache: FnR stats cache
  * @hdr_proc_ctx_cache: processing context cache
  * @hdr_proc_ctx_offset_cache: processing context offset cache
  * @rt_tbl_cache: routing table cache
@@ -1875,6 +1891,7 @@ struct ipa3_context {
 	struct kmem_cache *rt_rule_cache;
 	struct kmem_cache *hdr_cache;
 	struct kmem_cache *hdr_offset_cache;
+	struct kmem_cache *fnr_stats_cache;
 	struct kmem_cache *hdr_proc_ctx_cache;
 	struct kmem_cache *hdr_proc_ctx_offset_cache;
 	struct kmem_cache *rt_tbl_cache;
@@ -1981,7 +1998,7 @@ struct ipa3_context {
 	bool gsi_ch20_wa;
 	bool s1_bypass_arr[IPA_SMMU_CB_MAX];
 	u32 wdi_map_cnt;
-	struct wakeup_source w_lock;
+	struct wakeup_source *w_lock;
 	struct ipa3_wakelock_ref_cnt wakelock_ref_cnt;
 	/* RMNET_IOCTL_INGRESS_FORMAT_AGG_DATA */
 	bool ipa_client_apps_wan_cons_agg_gro;
@@ -3225,5 +3242,5 @@ int ipa3_uc_send_enable_flow_control(uint16_t gsi_chid,
 int ipa3_uc_send_disable_flow_control(void);
 int ipa3_uc_send_update_flow_control(uint32_t bitmask,
 	uint8_t  add_delete);
-int ipa3_qmi_reg_dereg_for_bw(bool bw_reg);
+int ipa3_qmi_reg_dereg_for_bw(bool bw_reg, int bw_reg_dereg_type);
 #endif /* _IPA3_I_H_ */

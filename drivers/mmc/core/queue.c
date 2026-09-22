@@ -21,6 +21,7 @@
 #include "queue.h"
 #include "block.h"
 #include "core.h"
+#include "crypto.h"
 #include "card.h"
 #include "host.h"
 
@@ -135,19 +136,13 @@ static enum blk_eh_timer_return mmc_mq_timed_out(struct request *req,
 	struct request_queue *q = req->q;
 	struct mmc_queue *mq = q->queuedata;
 	unsigned long flags;
-	int ret;
+	bool ignore_tout;
 
 	spin_lock_irqsave(q->queue_lock, flags);
+	ignore_tout = mq->recovery_needed || !mq->use_cqe;
+	spin_unlock_irqrestore(q->queue_lock, flags);
 
-	if (mq->recovery_needed || !mq->use_cqe) {
-		ret = BLK_EH_RESET_TIMER;
-		spin_unlock_irqrestore(q->queue_lock, flags);
-	} else {
-		spin_unlock_irqrestore(q->queue_lock, flags);
-		ret = mmc_cqe_timed_out(req);
-	}
-
-	return ret;
+	return ignore_tout ? BLK_EH_RESET_TIMER : mmc_cqe_timed_out(req);
 }
 
 static void mmc_mq_recovery_handler(struct work_struct *work)
@@ -201,7 +196,7 @@ static void mmc_queue_setup_discard(struct request_queue *q,
 	q->limits.discard_granularity = card->pref_erase << 9;
 	/* granularity must not be greater than max. discard */
 	if (card->pref_erase > max_discard)
-		q->limits.discard_granularity = 0;
+		q->limits.discard_granularity = SECTOR_SIZE;
 	if (mmc_can_secure_erase_trim(card))
 		blk_queue_flag_set(QUEUE_FLAG_SECERASE, q);
 }
@@ -384,8 +379,6 @@ static void mmc_setup_queue(struct mmc_queue *mq, struct mmc_card *card)
 	blk_queue_max_hw_sectors(mq->queue,
 		min(host->max_blk_count, host->max_req_size / 512));
 	blk_queue_max_segments(mq->queue, host->max_segs);
-	if (host->inlinecrypt_support)
-		queue_flag_set_unlocked(QUEUE_FLAG_INLINECRYPT, mq->queue);
 
 	if (host->ops->init)
 		host->ops->init(host);
@@ -403,6 +396,9 @@ static void mmc_setup_queue(struct mmc_queue *mq, struct mmc_card *card)
 	mutex_init(&mq->complete_lock);
 
 	init_waitqueue_head(&mq->wait);
+
+	if (host->cqe_ops && host->cqe_ops->cqe_crypto_update_queue)
+		host->cqe_ops->cqe_crypto_update_queue(host, mq->queue);
 }
 
 static int mmc_mq_init_queue(struct mmc_queue *mq, int q_depth,
@@ -467,6 +463,8 @@ static int mmc_mq_init(struct mmc_queue *mq, struct mmc_card *card,
 	blk_queue_rq_timeout(mq->queue, 60 * HZ);
 
 	mmc_setup_queue(mq, card);
+
+	mmc_crypto_setup_queue(host, mq->queue);
 
 	return 0;
 }

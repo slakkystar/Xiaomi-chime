@@ -22,7 +22,7 @@ config UNIX
 config UNIX_SCM
 	bool
 	depends on UNIX
-	default y
+	default n
 
 config UNIX_DIAG
 	tristate "UNIX: socket monitoring interface"

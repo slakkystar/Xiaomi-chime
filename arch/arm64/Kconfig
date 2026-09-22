@@ -936,7 +936,7 @@ config ARM64_DMA_IOMMU_ALIGNMENT
 endif
 
 config ARCH_MEMORY_PROBE
-	def_bool y
+	def_bool n
 	depends on MEMORY_HOTPLUG
 
 # Supported by clang >= 7.0

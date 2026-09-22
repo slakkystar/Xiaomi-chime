@@ -153,7 +153,6 @@ config FW_LOADER_USER_HELPER_FALLBACK
 config FW_CACHE
 	bool "Enable firmware caching during suspend"
 	depends on PM_SLEEP
-	default y if PM_SLEEP
 	help
 	  Because firmware caching generates uevent messages that are sent
 	  over a netlink socket, it can prevent suspend on many platforms.

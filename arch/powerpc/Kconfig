@@ -645,7 +645,7 @@ config ILLEGAL_POINTER_VALUE
 	default 0
 
 config ARCH_MEMORY_PROBE
-	def_bool y
+	def_bool n
 	depends on MEMORY_HOTPLUG
 
 # Some NUMA nodes have memory ranges that span
